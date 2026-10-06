@@ -413,10 +413,20 @@ button(NSString *title, NSRect frame, id target, SEL action)
 	if (busy || [loginPage superview] == nil)
 		return;
 	if (user == nil) {
+		id fr = [window firstResponder];
+
 		user = [[nameField stringValue] stringByTrimmingCharactersInSet:
 		    [NSCharacterSet whitespaceCharacterSet]];
 		if ([user length] == 0) {
 			[window makeFirstResponder: nameField];
+			return;
+		}
+		/* Return in the name field (it also reaches the default
+		 * button) moves on to the password instead of logging in. */
+		if ([[passwordField stringValue] length] == 0 &&
+		    (fr == nameField || ([fr isKindOfClass: [NSText class]] &&
+		    [(NSText *)fr delegate] == (id)nameField))) {
+			[window makeFirstResponder: passwordField];
 			return;
 		}
 	}

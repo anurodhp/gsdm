@@ -991,8 +991,11 @@ serve_greeter(struct user *u)
 		}
 		got = read(greeter_fd, buf + have, sizeof(buf) - have);
 		if (got <= 0) {
-			/* It closed its end: collect it next round. */
-			wait_for(greeter_pid, 5000, NULL);
+			/* It closed its end: collect it. */
+			if (wait_for(greeter_pid, 5000, &st))
+				logmsg("greeter closed the connection and exited (status 0x%x)", st);
+			else
+				logmsg("greeter closed the connection");
 			greeter_pid = -1;
 			memset(buf, 0, sizeof(buf));
 			return GREETER_DIED;
