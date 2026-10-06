@@ -859,6 +859,7 @@ wait_session(pid_t pid)
 /* greeter                                                             */
 
 static pid_t greeter_pid = -1;
+static pid_t greeter_pgid = -1;         /* its process group (setsid) */
 static int greeter_fd = -1;
 
 static int
@@ -909,6 +910,7 @@ start_greeter(void)
 	close(sv[1]);
 	greeter_fd = sv[0];
 	fcntl(greeter_fd, F_SETFD, FD_CLOEXEC);
+	greeter_pgid = greeter_pid;
 	logmsg("started greeter %s (pid %d)", cfg.greeter, (int)greeter_pid);
 	return 0;
 }
@@ -921,13 +923,13 @@ close_greeter(int force)
 		close(greeter_fd);
 		greeter_fd = -1;
 	}
-	if (greeter_pid > 0) {
-		if (force || !wait_for(greeter_pid, 5000, NULL))
-			stop_group(greeter_pid, 3000);
-		else
-			kill(-greeter_pid, SIGTERM);    /* helpers left in its group */
-	}
+	if (greeter_pid > 0 && (force || !wait_for(greeter_pid, 5000, NULL)))
+		stop_group(greeter_pid, 3000);
+	/* Helpers the greeter left in its process group. */
+	if (greeter_pgid > 0)
+		kill(-greeter_pgid, SIGTERM);
 	greeter_pid = -1;
+	greeter_pgid = -1;
 }
 
 static void
