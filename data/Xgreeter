@@ -1,0 +1,6 @@
+#!/bin/sh
+# Starts gsdm's login window. gsdm runs this as root with DISPLAY,
+# XAUTHORITY, HOME, the GSDM_* settings and its socket on fd 3.
+# Adjust the two paths for your GNUstep installation.
+. /usr/GNUstep/System/Library/Makefiles/GNUstep.sh
+exec /usr/GNUstep/System/Library/CoreServices/LoginWindow.app/LoginWindow

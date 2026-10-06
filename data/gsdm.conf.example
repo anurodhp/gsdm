@@ -1,0 +1,12 @@
+# /etc/gsdm/gsdm.conf -- see README.md for every key.
+display = :0
+server = /usr/bin/X :0 -nolisten tcp
+auth_dir = /var/lib/gsdm
+greeter = /etc/gsdm/Xgreeter
+greeter_home = /var/lib/gsdm/greeter
+session = /etc/gsdm/Xsession
+reboot = /sbin/reboot
+halt = /sbin/halt
+min_uid = 1000
+allow_root_login = no
+# background_image = /usr/share/backgrounds/default.png

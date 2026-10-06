@@ -1,0 +1,14 @@
+#!/bin/sh
+# The user's session. gsdm runs this as the user with DISPLAY, HOME,
+# LOGNAME, USER, PATH, SHELL and XAUTHORITY set; the session ends when it
+# exits.
+exec > "$HOME/.xsession-errors" 2>&1
+[ -f /usr/GNUstep/System/Library/Makefiles/GNUstep.sh ] &&
+    . /usr/GNUstep/System/Library/Makefiles/GNUstep.sh
+if [ -x "$HOME/.xsession" ]; then
+    exec "$HOME/.xsession"
+fi
+for wm in wmaker startxfce4 twm xterm; do
+    command -v "$wm" >/dev/null 2>&1 && exec "$wm"
+done
+exit 1
