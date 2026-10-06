@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 static const CGFloat kTileW = 124, kTileH = 118;
 
@@ -295,11 +296,14 @@ button(NSString *title, NSRect frame, id target, SEL action)
 	[panel addSubview: shutdownButton];
 
 	if (fd >= 0) {
-		daemon = [[NSFileHandle alloc] initWithFileDescriptor: fd closeOnDealloc: NO];
-		[[NSNotificationCenter defaultCenter] addObserver: self
-		    selector: @selector(daemonSaid:)
-		    name: NSFileHandleReadCompletionNotification object: daemon];
-		[daemon readInBackgroundAndNotify];
+		NSRunLoop *rl = [NSRunLoop currentRunLoop];
+
+		fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+		pollTimer = [NSTimer timerWithTimeInterval: 0.1 target: self
+		    selector: @selector(pollDaemon:) userInfo: nil repeats: YES];
+		[rl addTimer: pollTimer forMode: NSDefaultRunLoopMode];
+		[rl addTimer: pollTimer forMode: NSEventTrackingRunLoopMode];
+		[rl addTimer: pollTimer forMode: NSModalPanelRunLoopMode];
 	} else {
 		NSLog(@"LoginWindow: GSDM_FD not set, preview mode (no logins)");
 	}
@@ -449,19 +453,31 @@ button(NSString *title, NSRect frame, id target, SEL action)
 	[window makeFirstResponder: passwordField];
 }
 
-- (void) daemonSaid: (NSNotification *)n
+/*
+ * gsdm's replies, polled from a timer that runs in every run loop mode the
+ * window uses. (An NSFileHandle background read, which only fires in the
+ * default mode, was seen under QEMU to never deliver a FAIL reply that
+ * gsdm had sent, leaving the window disabled; the cause was not pinned
+ * down, so the reply is read directly instead.)
+ */
+- (void) pollDaemon: (NSTimer *)t
 {
-	NSData *d = [[n userInfo] objectForKey: NSFileHandleNotificationDataItem];
-	NSString *s;
+	char buf[64];
+	ssize_t n = read(fd, buf, sizeof(buf));
 
-	if ([d length] == 0) {
+	if (n < 0)
+		return;         /* EAGAIN: nothing yet */
+	if (n == 0) {
 		NSLog(@"LoginWindow: gsdm closed the connection");
+		[pollTimer invalidate];
+		pollTimer = nil;
 		[NSApp terminate: nil];
 		return;
 	}
-	s = [[[NSString alloc] initWithData: d encoding: NSUTF8StringEncoding] autorelease];
-	if ([s hasPrefix: @"OK"]) {
+	if (n >= 2 && strncmp(buf, "OK", 2) == 0) {
 		/* gsdm starts the session once we are gone. */
+		[pollTimer invalidate];
+		pollTimer = nil;
 		[window orderOut: nil];
 		[NSApp terminate: nil];
 		return;
@@ -469,7 +485,6 @@ button(NSString *title, NSRect frame, id target, SEL action)
 	[self loginFailed: selectedLogin == nil
 	    ? @"Incorrect name or password."
 	    : @"Incorrect password."];
-	[daemon readInBackgroundAndNotify];
 }
 
 - (BOOL) confirm: (NSString *)what message: (NSString *)msg

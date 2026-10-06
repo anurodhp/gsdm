@@ -30,7 +30,7 @@
 
 	NSString *selectedLogin;        /* nil: "Other..." */
 	int fd;                         /* socket to gsdm, -1 in preview mode */
-	NSFileHandle *daemon;
+	NSTimer *pollTimer;             /* reads gsdm's replies */
 	BOOL busy;
 	NSTimer *shakeTimer;
 	int shakeStep;
