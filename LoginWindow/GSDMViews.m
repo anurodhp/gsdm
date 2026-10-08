@@ -250,8 +250,14 @@ drawCentered(NSString *s, NSDictionary *attrs, NSRect r)
 	for (i = 0; i < [words count] && [s length] < 2; i++) {
 		NSString *w = [words objectAtIndex: i];
 
-		if ([w length] > 0)
-			[s appendString: [[w substringToIndex: 1] uppercaseString]];
+		/* a whole character, not a UTF-16 unit: a surrogate pair (a name in an
+		 * astral script or an emoji) or a letter with its combining marks must
+		 * not be cut in two */
+		if ([w length] > 0) {
+			NSRange r = [w rangeOfComposedCharacterSequenceAtIndex: 0];
+
+			[s appendString: [[w substringWithRange: r] uppercaseString]];
+		}
 	}
 	return s;
 }
