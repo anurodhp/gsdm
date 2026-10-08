@@ -1,4 +1,4 @@
-# GSDM a Gnustep Display Manager 
+# GSDM a GNUstep Display Manager 
 
 A display manager for GNUstep systems. It starts an X server, shows a
 full-screen login window, authenticates the user and starts their X session.
