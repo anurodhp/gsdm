@@ -2,7 +2,11 @@
 # The user's session. gsdm runs this as the user with DISPLAY, HOME,
 # LOGNAME, USER, PATH, SHELL and XAUTHORITY set; the session ends when it
 # exits.
-exec > "$HOME/.xsession-errors" 2>&1
+# An unwritable home must not end the session (a failed redirection of
+# the exec builtin exits a POSIX shell).
+if ( : >> "$HOME/.xsession-errors" ) 2>/dev/null; then
+    exec > "$HOME/.xsession-errors" 2>&1
+fi
 [ -f /usr/GNUstep/System/Library/Makefiles/GNUstep.sh ] &&
     . /usr/GNUstep/System/Library/Makefiles/GNUstep.sh
 if [ -x "$HOME/.xsession" ]; then

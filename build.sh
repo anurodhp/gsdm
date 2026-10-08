@@ -19,6 +19,9 @@ GSDM_SRC="$HERE" "$STAGING/build_gsdm.sh"
 [ "${1:-}" = deploy ] || exit 0
 HOST="${DEPLOY_HOST:-root@10.0.0.142}"
 GSROOT="$(cd "$STAGING/libc_build/gnustep/root/usr/GNUstep/System" && pwd -P)"
+# Unpack beside the old copy and swap, so an interrupted copy leaves a working app.
 tar -C "$GSROOT/Library/CoreServices" -cf - LoginWindow.app |
-    ssh "$HOST" 'rm -rf /System/Library/CoreServices/LoginWindow.app && tar -C /System/Library/CoreServices -xf -'
+    ssh "$HOST" 'set -e; d=/System/Library/CoreServices; rm -rf $d/LoginWindow.app.new
+        mkdir $d/LoginWindow.app.new && tar -C $d/LoginWindow.app.new -xf - --strip-components=1
+        rm -rf $d/LoginWindow.app && mv $d/LoginWindow.app.new $d/LoginWindow.app'
 echo "deployed LoginWindow.app to $HOST (restart gsdm to pick it up)"

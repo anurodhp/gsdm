@@ -30,6 +30,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #ifdef __APPLE__
 #include <sys/sysctl.h>
@@ -47,6 +48,10 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+
+#ifdef __linux__
+#include <shadow.h>
+#endif
 
 #include <X11/Xauth.h>
 
@@ -101,7 +106,7 @@ config_defaults(void)
 	cfg.halt = strdup("/sbin/halt");
 	cfg.disable_file = strdup("");
 	cfg.require_bootarg = strdup("");
-	cfg.allow_root_login = 1;
+	cfg.allow_root_login = 0;
 	cfg.allow_null_passwd = 0;
 	cfg.min_uid = 500;
 	cfg.background_image = strdup("");
@@ -292,8 +297,8 @@ child_setup(int keep_fd)
 	sigprocmask(SIG_SETMASK, &none, NULL);
 	setsid();
 	maxfd = (int)sysconf(_SC_OPEN_MAX);
-	if (maxfd < 0 || maxfd > 1024)
-		maxfd = 1024;
+	if (maxfd < 0 || maxfd > 8192)
+		maxfd = 8192;
 	for (fd = 3; fd < maxfd; fd++)
 		if (fd != keep_fd)
 			close(fd);
@@ -567,9 +572,16 @@ user_auth_path(char *path, size_t size, const char *home)
 	snprintf(path, size, "%s/.Xauthority", strcmp(home, "/") == 0 ? "" : home);
 }
 
+/* xdm's fallback: a private file in userAuthDir, removed when the session ends. */
+static void
+fallback_auth_path(char *path, size_t size, uid_t uid)
+{
+	snprintf(path, size, "%s/.Xauth-gsdm-%d", cfg.user_auth_dir, (int)uid);
+}
+
 /* Writes the session's cookie; returns the file the session should use. */
 static char *
-write_user_auth(const char *home)
+write_user_auth(const char *home, uid_t uid)
 {
 	static char path[PATH_MAX];
 	char host[256];
@@ -580,9 +592,9 @@ write_user_auth(const char *home)
 	user_auth_path(path, sizeof(path), home);
 	if (update_auth_file(path, 1) == 0)
 		return path;
-	/* xdm's fallback: a private temporary file in userAuthDir. */
-	snprintf(path, sizeof(path), "%s/.XauthXXXXXX", cfg.user_auth_dir);
-	fd = mkstemp(path);
+	fallback_auth_path(path, sizeof(path), uid);
+	unlink(path);
+	fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
 	if (fd < 0 || (f = fdopen(fd, "w")) == NULL) {
 		fprintf(stderr, "gsdm: cannot write an Xauthority for the session: %s\n", strerror(errno));
 		return NULL;
@@ -599,7 +611,28 @@ write_user_auth(const char *home)
 
 static pid_t server_pid = -1;
 
-/* A lock left by a server that is gone (hard reset) would stop the next one. */
+/*
+ * A lock left by a server that is gone (hard reset) would stop the next one.
+ * Whether the old server is alive is decided by connecting to its socket:
+ * the pid in the lock may have been reused by an unrelated process.
+ */
+static int
+x_socket_alive(const char *sock)
+{
+	struct sockaddr_un sa;
+	int fd, ok;
+
+	fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (fd < 0)
+		return 0;
+	memset(&sa, 0, sizeof(sa));
+	sa.sun_family = AF_UNIX;
+	snprintf(sa.sun_path, sizeof(sa.sun_path), "%s", sock);
+	ok = connect(fd, (struct sockaddr *)&sa, sizeof(sa)) == 0;
+	close(fd);
+	return ok;
+}
+
 static void
 clear_stale_lock(void)
 {
@@ -617,9 +650,9 @@ clear_stale_lock(void)
 	close(fd);
 	buf[n > 0 ? n : 0] = '\0';
 	pid = (pid_t)atoi(buf);
-	if (pid > 0 && kill(pid, 0) == 0)
+	if (x_socket_alive(sock))
 		return;         /* a live server owns it */
-	logmsg("removing stale %s (pid %d is gone) and %s", lock, (int)pid, sock);
+	logmsg("removing stale %s (pid %d is not serving) and %s", lock, (int)pid, sock);
 	unlink(lock);
 	unlink(sock);
 }
@@ -713,39 +746,133 @@ struct user {
 	gid_t gid;
 };
 
+enum verdict { V_OK = 0, V_UNKNOWN = 1, V_DENIED = 2 };
+
+/* A login shell: executable, not false/nologin, and in /etc/shells if there is one. */
 static int
-verify_password(const char *name, const char *password, struct user *u)
+real_shell(const char *sh)
 {
-	struct passwd *p;
+	const char *base;
+	char line[1024];
+	FILE *f;
+	int listed = 0;
+
+	if (sh == NULL || *sh == '\0' || access(sh, X_OK) != 0)
+		return 0;
+	base = strrchr(sh, '/');
+	base = base ? base + 1 : sh;
+	if (strcmp(base, "false") == 0 || strcmp(base, "nologin") == 0)
+		return 0;
+	f = fopen("/etc/shells", "r");
+	if (f == NULL)
+		return 1;
+	while (!listed && fgets(line, sizeof(line), f) != NULL) {
+		line[strcspn(line, " \t\r\n")] = '\0';
+		if (line[0] != '#' && strcmp(line, sh) == 0)
+			listed = 1;
+	}
+	fclose(f);
+	return listed;
+}
+
+/* The checks the greeter's list implies but cannot enforce: "Other..." takes any name. */
+static int
+account_allowed(const struct passwd *p)
+{
+	if (p->pw_uid == 0)
+		return cfg.allow_root_login;
+	if ((int)p->pw_uid < cfg.min_uid || p->pw_name[0] == '_' || !real_shell(p->pw_shell))
+		return 0;
+	if (access("/etc/nologin", F_OK) == 0)
+		return 0;
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+	if (p->pw_expire != 0 && p->pw_expire < time(NULL))
+		return 0;
+#endif
+	return 1;
+}
+
+/*
+ * Runs in a child: a long-lived gsdm must not keep the account database's
+ * state (an open pwd.db, caches) between logins, or an account added or a
+ * password changed since gsdm started would not be seen. Writes the
+ * account to wfd on success; the exit status is the verdict.
+ */
+static void
+verify_in_child(const char *name, const char *password, int wfd)
+{
+	struct passwd *p = getpwnam(name);
 	const char *hash;
 	char *crypted;
+	struct user u;
 	int ok;
 
-	if (*name == '\0')
-		return 0;
-	p = getpwnam(name);
 	if (p == NULL) {
-		endpwent();
-		return 0;
-	}
-	if (p->pw_uid == 0 && !cfg.allow_root_login) {
-		endpwent();
-		return 0;
+		(void)crypt(password, "xx");    /* take as long as a real account */
+		_exit(V_UNKNOWN);
 	}
 	hash = p->pw_passwd ? p->pw_passwd : "";
+#ifdef __linux__
+	{
+		struct spwd *sp = getspnam(name);
+
+		if (sp != NULL && sp->sp_pwdp != NULL)
+			hash = sp->sp_pwdp;
+	}
+#endif
 	crypted = crypt(password, hash);
 	ok = crypted != NULL && strcmp(crypted, hash) == 0;
-	if (!ok && cfg.allow_null_passwd && *hash == '\0')
+	if (!ok && cfg.allow_null_passwd && *hash == '\0' && *password == '\0')
 		ok = 1;
-	if (ok) {
-		snprintf(u->name, sizeof(u->name), "%s", p->pw_name);
-		snprintf(u->home, sizeof(u->home), "%s", p->pw_dir && *p->pw_dir ? p->pw_dir : "/");
-		snprintf(u->shell, sizeof(u->shell), "%s", p->pw_shell && *p->pw_shell ? p->pw_shell : "/bin/sh");
-		u->uid = p->pw_uid;
-		u->gid = p->pw_gid;
+	if (!ok || !account_allowed(p))
+		_exit(V_DENIED);
+	memset(&u, 0, sizeof(u));
+	snprintf(u.name, sizeof(u.name), "%s", p->pw_name);
+	snprintf(u.home, sizeof(u.home), "%s", p->pw_dir && *p->pw_dir ? p->pw_dir : "/");
+	snprintf(u.shell, sizeof(u.shell), "%s", p->pw_shell && *p->pw_shell ? p->pw_shell : "/bin/sh");
+	u.uid = p->pw_uid;
+	u.gid = p->pw_gid;
+	if (write(wfd, &u, sizeof(u)) != (ssize_t)sizeof(u))
+		_exit(V_DENIED);
+	_exit(V_OK);
+}
+
+static enum verdict
+verify_password(const char *name, const char *password, struct user *u)
+{
+	int fds[2], st = 0;
+	size_t got = 0;
+	pid_t pid;
+
+	if (*name == '\0')
+		return V_UNKNOWN;
+	if (pipe(fds) != 0)
+		return V_DENIED;
+	pid = fork();
+	if (pid < 0) {
+		close(fds[0]);
+		close(fds[1]);
+		return V_DENIED;
 	}
-	endpwent();
-	return ok;
+	if (pid == 0) {
+		close(fds[0]);
+		child_setup(fds[1]);
+		verify_in_child(name, password, fds[1]);
+	}
+	close(fds[1]);
+	while (got < sizeof(*u)) {
+		ssize_t n = read(fds[0], (char *)u + got, sizeof(*u) - got);
+
+		if (n <= 0)
+			break;
+		got += (size_t)n;
+	}
+	close(fds[0]);
+	wait_for(pid, -1, &st);
+	if (WIFEXITED(st) && WEXITSTATUS(st) == V_OK && got == sizeof(*u))
+		return V_OK;
+	memset(u, 0, sizeof(*u));
+	return WIFEXITED(st) && WEXITSTATUS(st) == V_UNKNOWN ? V_UNKNOWN : V_DENIED;
 }
 
 /* ------------------------------------------------------------------ */
@@ -786,7 +913,9 @@ start_session(struct user *u)
 			_exit(1);
 		}
 		/* After setuid, as xdm's SetUserAuthorization runs. */
-		xauth = write_user_auth(u->home);
+		xauth = write_user_auth(u->home, u->uid);
+		if (xauth == NULL)
+			_exit(1);
 		if (chdir(u->home) != 0) {
 			fprintf(stderr, "gsdm: cannot chdir to %s, using /\n", u->home);
 			(void)chdir("/");
@@ -806,8 +935,20 @@ start_session(struct user *u)
 			env[n++] = env_entry("XAUTHORITY", xauth);
 		env[n] = NULL;
 		argv = split_args(cfg.session, 0);
+		/* Not the daemon's log: the session script redirects its own output. */
+		{
+			int nul = open("/dev/null", O_WRONLY);
+
+			if (nul >= 0) {
+				dup2(nul, 1);
+				dup2(nul, 2);
+				if (nul > 2)
+					close(nul);
+			}
+		}
+		umask(022);
 		execve(argv[0], argv, env);
-		fprintf(stderr, "gsdm: exec session %s: %s\n", argv[0], strerror(errno));
+		/* stderr is /dev/null now; the failure is only in the exit status. */
 		_exit(1);
 	}
 	return pid;
@@ -823,15 +964,20 @@ remove_user_auth(const struct user *u)
 		char path[PATH_MAX];
 
 		child_setup(-1);
-		if (setgid(u->gid) != 0 || setuid(u->uid) != 0)
+		if (setgid(u->gid) != 0 || initgroups(u->name, (int)u->gid) != 0 ||
+		    setuid(u->uid) != 0)
 			_exit(1);
 		user_auth_path(path, sizeof(path), u->home);
 		if (access(path, F_OK) == 0)
 			update_auth_file(path, 0);
+		fallback_auth_path(path, sizeof(path), u->uid);
+		unlink(path);
 		_exit(0);
 	}
-	if (pid > 0)
-		wait_for(pid, 10000, NULL);
+	if (pid > 0 && !wait_for(pid, 10000, NULL)) {
+		kill(pid, SIGKILL);
+		wait_for(pid, -1, NULL);
+	}
 }
 
 /* Waits for the session; stops it if the X server or gsdm goes away. */
@@ -843,6 +989,10 @@ wait_session(pid_t pid)
 
 		if (waitpid(pid, &st, WNOHANG) == pid) {
 			logmsg("session ended (status 0x%x)", st);
+			/* What it left running must not outlive the login. */
+			kill(-pid, SIGHUP);
+			msleep(300);
+			kill(-pid, SIGKILL);
 			return;
 		}
 		if (got_quit || !server_alive()) {
@@ -964,6 +1114,7 @@ serve_greeter(struct user *u)
 {
 	char buf[2048];
 	size_t have = 0;
+	int skipping = 0;        /* dropping the rest of an oversized request */
 
 	for (;;) {
 		struct pollfd pfd;
@@ -985,9 +1136,11 @@ serve_greeter(struct user *u)
 		if (poll(&pfd, 1, 500) <= 0)
 			continue;
 		if (have >= sizeof(buf)) {
-			logmsg("greeter request too long");
+			logmsg("greeter request too long, ignored");
 			memset(buf, 0, sizeof(buf));
-			return GREETER_DIED;
+			have = 0;
+			skipping = 1;
+			reply("FAIL\n");
 		}
 		got = read(greeter_fd, buf + have, sizeof(buf) - have);
 		if (got <= 0) {
@@ -999,6 +1152,20 @@ serve_greeter(struct user *u)
 			greeter_pid = -1;
 			memset(buf, 0, sizeof(buf));
 			return GREETER_DIED;
+		}
+		if (skipping) {
+			char *z = memchr(buf + have, '\0', (size_t)got);
+			size_t drop;
+
+			if (z == NULL) {
+				memset(buf + have, 0, (size_t)got);
+				continue;
+			}
+			drop = (size_t)(z + 1 - (buf + have));
+			memmove(buf + have, buf + have + drop, (size_t)got - drop);
+			memset(buf + have + got - drop, 0, drop);
+			got -= (ssize_t)drop;
+			skipping = 0;
 		}
 		have += (size_t)got;
 		for (;;) {
@@ -1018,16 +1185,21 @@ serve_greeter(struct user *u)
 				break;
 			end = (size_t)(f[need - 1] - buf) + strlen(f[need - 1]) + 1;
 			if (need == 3) {
-				int ok = verify_password(f[1], f[2], u);
+				enum verdict v = verify_password(f[1], f[2], u);
 
 				memset(f[2], 0, strlen(f[2]));
-				if (ok) {
+				if (v == V_OK) {
 					logmsg("login: %s", u->name);
 					reply("OK\n");
 					memset(buf, 0, sizeof(buf));
 					return GREETER_LOGIN;
 				}
-				logmsg("failed login for \"%s\"", f[1]);
+				/* Only a name that is an account is logged: anything
+				 * else may be a password typed into the name box. */
+				if (v == V_DENIED)
+					logmsg("failed login for \"%.64s\"", f[1]);
+				else
+					logmsg("failed login for an unknown name");
 				msleep(1000);   /* slow down guessing */
 				reply("FAIL\n");
 			} else if (strcmp(f[0], "RESTART") == 0) {
@@ -1140,6 +1312,14 @@ main(int argc, char **argv)
 				break;          /* xdm terminateServer: a fresh server per login */
 			}
 			close_greeter(1);
+			if (o == GREETER_RESTART_SERVER) {
+				if (too_many_failures()) {
+					logmsg("the X server keeps dying, giving up");
+					stop_server();
+					return 1;
+				}
+				sleep(1);
+			}
 			if (o != GREETER_DIED)
 				break;
 			if (too_many_failures()) {

@@ -16,6 +16,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
 
 static const CGFloat kTileW = 124, kTileH = 118;
 
@@ -46,22 +47,22 @@ realShell(const char *sh)
 	return listed;
 }
 
-/* The GECOS full name (first field, BSD '&' = capitalized login). */
+/* The GECOS full name (first field, '&' = the login as written). */
 static NSString *
 fullNameOf(struct passwd *p)
 {
 	NSString *login = [NSString stringWithUTF8String: p->pw_name];
-	NSString *g, *cap;
+	NSString *g;
 
+	if (login == nil)
+		return nil;
 	if (p->pw_gecos == NULL || p->pw_gecos[0] == '\0' || p->pw_gecos[0] == ',')
 		return login;
 	g = [NSString stringWithUTF8String: p->pw_gecos];
 	if (g == nil)
 		return login;
 	g = [[g componentsSeparatedByString: @","] objectAtIndex: 0];
-	cap = [[[login substringToIndex: 1] uppercaseString]
-	    stringByAppendingString: [login substringFromIndex: 1]];
-	g = [g stringByReplacingOccurrencesOfString: @"&" withString: cap];
+	g = [g stringByReplacingOccurrencesOfString: @"&" withString: login];
 	g = [g stringByTrimmingCharactersInSet: [NSCharacterSet whitespaceCharacterSet]];
 	/* The "User &" this system's adduser writes: show just the name. */
 	if ([g hasPrefix: @"User "])
@@ -84,13 +85,18 @@ listUsers(void)
 	const char *e = getenv("GSDM_MIN_UID");
 	long minUid = e ? atol(e) : 500;
 	struct passwd *p;
+	NSString *login, *full;
 
 	setpwent();
 	while ((p = getpwent()) != NULL) {
 		if ((long)p->pw_uid < minUid || p->pw_name[0] == '_' || !realShell(p->pw_shell))
 			continue;
-		[users addObject: [NSArray arrayWithObjects:
-		    [NSString stringWithUTF8String: p->pw_name], fullNameOf(p), nil]];
+		/* A name that is not UTF-8 cannot be shown (or typed): skip it. */
+		login = [NSString stringWithUTF8String: p->pw_name];
+		full = fullNameOf(p);
+		if (login == nil || full == nil)
+			continue;
+		[users addObject: [NSArray arrayWithObjects: login, full, nil]];
 	}
 	endpwent();
 	[users sortUsingFunction: byName context: NULL];
@@ -415,6 +421,10 @@ button(NSString *title, NSRect frame, id target, SEL action)
 	while (left > 0) {
 		ssize_t w = write(fd, p, left);
 
+		if (w < 0 && (errno == EAGAIN || errno == EINTR)) {
+			usleep(2000);   /* the socket is non-blocking */
+			continue;
+		}
 		if (w <= 0)
 			break;
 		p += w;
@@ -446,6 +456,11 @@ button(NSString *title, NSRect frame, id target, SEL action)
 			[window makeFirstResponder: passwordField];
 			return;
 		}
+	}
+	if ([user lengthOfBytesUsingEncoding: NSUTF8StringEncoding] > 255 ||
+	    [[passwordField stringValue] lengthOfBytesUsingEncoding: NSUTF8StringEncoding] > 1000) {
+		[message setStringValue: @"Name or password too long."];
+		return;
 	}
 	[message setStringValue: @""];
 	[self setBusy: YES];
@@ -539,8 +554,11 @@ button(NSString *title, NSRect frame, id target, SEL action)
 	/* The shadow is the dearest part of the panel to redraw. */
 	[panel setShadowHidden: YES];
 	[shakeTimer invalidate];
-	shakeTimer = [NSTimer scheduledTimerWithTimeInterval: 0.035 target: self
+	shakeTimer = [NSTimer timerWithTimeInterval: 0.035 target: self
 	    selector: @selector(shakeTick:) userInfo: nil repeats: YES];
+	[[NSRunLoop currentRunLoop] addTimer: shakeTimer forMode: NSDefaultRunLoopMode];
+	[[NSRunLoop currentRunLoop] addTimer: shakeTimer forMode: NSEventTrackingRunLoopMode];
+	[[NSRunLoop currentRunLoop] addTimer: shakeTimer forMode: NSModalPanelRunLoopMode];
 }
 
 - (void) shakeTick: (NSTimer *)t

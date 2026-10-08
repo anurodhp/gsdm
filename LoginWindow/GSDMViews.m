@@ -23,8 +23,8 @@ drawCentered(NSString *s, NSDictionary *attrs, NSRect r)
 @implementation GSDMWindow
 /*
  * Tab and Shift-Tab. The field editor swallows Tab, and under this X server
- * Shift-Tab arrives with no characters at all, so both are taken here by
- * key code (23 is Tab in X) or character and moved along the key view loop.
+ * Shift-Tab arrives with no characters at all (key code 23 is Tab in X), so
+ * both are taken here and moved along the key view loop.
  */
 - (void) sendEvent: (NSEvent *)e
 {
@@ -33,7 +33,8 @@ drawCentered(NSString *s, NSDictionary *attrs, NSRect r)
 		BOOL back = ([e modifierFlags] & NSShiftKeyMask) != 0;
 		unichar ch = [c length] ? [c characterAtIndex: 0] : 0;
 
-		if (ch == NSTabCharacter || ch == NSBackTabCharacter || [e keyCode] == 23) {
+		if (ch == NSTabCharacter || ch == NSBackTabCharacter ||
+		    ([c length] == 0 && back && [e keyCode] == 23)) {
 			id from = [self firstResponder];
 			NSView *to;
 
