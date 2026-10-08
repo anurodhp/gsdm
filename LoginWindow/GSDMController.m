@@ -249,12 +249,9 @@ button(NSString *title, NSRect frame, id target, SEL action)
 	[backButton setKeyEquivalent: @"\033"];
 	[loginPage addSubview: backButton];
 
-	/* Tab order; GNUstep's automatic loop misses views that are hidden
-	 * or re-parented between pages. */
+	/* Tab order: the text fields only (the buttons do not take focus). */
 	[nameField setNextKeyView: passwordField];
-	[passwordField setNextKeyView: loginButton];
-	[loginButton setNextKeyView: backButton];
-	[backButton setNextKeyView: nameField];
+	[passwordField setNextKeyView: nameField];
 }
 
 - (void) applicationDidFinishLaunching: (NSNotification *)n
@@ -269,6 +266,8 @@ button(NSString *title, NSRect frame, id target, SEL action)
 	window = [[GSDMWindow alloc] initWithContentRect: screen
 	    styleMask: NSBorderlessWindowMask backing: NSBackingStoreBuffered defer: NO];
 	[window setReleasedWhenClosed: NO];
+	/* Adding a view to the window would rebuild the loop set in buildLoginPage. */
+	[window setAutorecalculatesKeyViewLoop: NO];
 	[window setTitle: @"Login"];
 	bg = [[GSDMBackgroundView alloc] initWithFrame: NSMakeRect(0, 0, screen.size.width, screen.size.height)];
 	if (img != NULL && *img) {
@@ -345,7 +344,7 @@ button(NSString *title, NSRect frame, id target, SEL action)
 	[nameLabel setStringValue: other ? @"" : [tile fullName]];
 	[nameLabel setHidden: other];
 	[nameField setHidden: !other];
-	[backButton setNextKeyView: other ? (NSView *)nameField : (NSView *)passwordField];
+	[passwordField setNextKeyView: other ? (NSView *)nameField : (NSView *)passwordField];
 	[nameField setStringValue: @""];
 	[passwordField setStringValue: @""];
 	[message setStringValue: @""];
