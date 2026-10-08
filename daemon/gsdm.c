@@ -115,6 +115,29 @@ config_defaults(void)
 
 static void logmsg(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
+/* Copies a name from the greeter for the log: control characters (a newline
+ * would forge a log line) become '?', and the cut at `max` bytes never lands
+ * inside a UTF-8 sequence. */
+static const char *
+logsafe(const char *s, char *out, size_t max)
+{
+	size_t n = 0;
+
+	for (; *s != '\0' && n + 1 < max; s++) {
+		unsigned char c = (unsigned char)*s;
+
+		out[n++] = (c < 0x20 || c == 0x7f) ? '?' : (char)c;
+	}
+	if (((unsigned char)*s & 0xc0) == 0x80) {   /* cut inside a sequence: drop it whole */
+		while (n > 0 && ((unsigned char)out[n - 1] & 0xc0) == 0x80)
+			n--;
+		if (n > 0)
+			n--;                      /* its lead byte */
+	}
+	out[n] = '\0';
+	return out;
+}
+
 static void
 logmsg(const char *fmt, ...)
 {
@@ -1197,7 +1220,11 @@ serve_greeter(struct user *u)
 				/* Only a name that is an account is logged: anything
 				 * else may be a password typed into the name box. */
 				if (v == V_DENIED)
-					logmsg("failed login for \"%.64s\"", f[1]);
+				{
+					char safe[80];
+
+					logmsg("failed login for \"%s\"", logsafe(f[1], safe, sizeof(safe)));
+				}
 				else
 					logmsg("failed login for an unknown name");
 				msleep(1000);   /* slow down guessing */
