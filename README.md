@@ -7,6 +7,10 @@ the daemon is plain C and the greeter is plain GNUstep AppKit.
 
 ![login window](docs/login-window.png)
 
+A wrong password shakes the panel and shows a message:
+
+![wrong password](docs/wrong-password.png)
+
 Two programs:
 
 | | |
