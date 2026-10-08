@@ -18,7 +18,9 @@
 @interface GSDMBackgroundView : NSView
 {
 	NSImage *image;
+	NSImage *cache;
 }
+- (void) paint;
 - (void) setImage: (NSImage *)anImage;
 @end
 
@@ -27,7 +29,9 @@
 {
 	NSString *title;
 	NSString *subtitle;
+	BOOL shadowHidden;
 }
+- (void) setShadowHidden: (BOOL)flag;
 - (void) setTitle: (NSString *)aTitle subtitle: (NSString *)aSubtitle;
 + (CGFloat) headerHeight;
 @end

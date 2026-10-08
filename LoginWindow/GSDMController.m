@@ -63,6 +63,10 @@ fullNameOf(struct passwd *p)
 	    stringByAppendingString: [login substringFromIndex: 1]];
 	g = [g stringByReplacingOccurrencesOfString: @"&" withString: cap];
 	g = [g stringByTrimmingCharactersInSet: [NSCharacterSet whitespaceCharacterSet]];
+	/* The "User &" this system's adduser writes: show just the name. */
+	if ([g hasPrefix: @"User "])
+		g = [[g substringFromIndex: 5]
+		    stringByTrimmingCharactersInSet: [NSCharacterSet whitespaceCharacterSet]];
 	return [g length] ? g : login;
 }
 
@@ -532,6 +536,8 @@ button(NSString *title, NSRect frame, id target, SEL action)
 - (void) shake
 {
 	shakeStep = 0;
+	/* The shadow is the dearest part of the panel to redraw. */
+	[panel setShadowHidden: YES];
 	[shakeTimer invalidate];
 	shakeTimer = [NSTimer scheduledTimerWithTimeInterval: 0.035 target: self
 	    selector: @selector(shakeTick:) userInfo: nil repeats: YES];
@@ -548,6 +554,7 @@ button(NSString *title, NSRect frame, id target, SEL action)
 	if (++shakeStep >= (int)(sizeof(dx) / sizeof(dx[0]))) {
 		[shakeTimer invalidate];
 		shakeTimer = nil;
+		[panel setShadowHidden: NO];
 	}
 }
 

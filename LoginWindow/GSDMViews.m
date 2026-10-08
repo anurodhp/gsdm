@@ -68,6 +68,7 @@ drawCentered(NSString *s, NSDictionary *attrs, NSRect r)
 - (void) dealloc
 {
 	[image release];
+	[cache release];
 	[super dealloc];
 }
 
@@ -80,6 +81,7 @@ drawCentered(NSString *s, NSDictionary *attrs, NSRect r)
 - (void) setImage: (NSImage *)anImage
 {
 	ASSIGN(image, anImage);
+	DESTROY(cache);
 	[self setNeedsDisplay: YES];
 }
 
@@ -88,7 +90,25 @@ drawCentered(NSString *s, NSDictionary *attrs, NSRect r)
 	return YES;
 }
 
+/*
+ * The gradient or scaled image is rendered once into a bitmap; redraws,
+ * which the panel's shake asks for dozens of, only copy the damaged part.
+ */
 - (void) drawRect: (NSRect)rect
+{
+	NSRect b = [self bounds];
+
+	if (cache == nil || !NSEqualSizes([cache size], b.size)) {
+		DESTROY(cache);
+		cache = [[NSImage alloc] initWithSize: b.size];
+		[cache lockFocus];
+		[self paint];
+		[cache unlockFocus];
+	}
+	[cache drawInRect: rect fromRect: rect operation: NSCompositeCopy fraction: 1.0];
+}
+
+- (void) paint
 {
 	NSRect b = [self bounds];
 	NSGradient *g;
@@ -136,6 +156,14 @@ drawCentered(NSString *s, NSDictionary *attrs, NSRect r)
 	[self setNeedsDisplay: YES];
 }
 
+- (void) setShadowHidden: (BOOL)flag
+{
+	if (flag == shadowHidden)
+		return;
+	shadowHidden = flag;
+	[self setNeedsDisplay: YES];
+}
+
 - (void) drawRect: (NSRect)rect
 {
 	NSRect b = NSInsetRect([self bounds], 8, 8);
@@ -147,7 +175,7 @@ drawCentered(NSString *s, NSDictionary *attrs, NSRect r)
 	int i;
 
 	/* A soft shadow: a few widening, fading outlines. */
-	for (i = 8; i >= 1; i--) {
+	for (i = shadowHidden ? 0 : 8; i >= 1; i--) {
 		NSRect s = NSOffsetRect(NSInsetRect(b, -i, -i), 0, -3);
 
 		[rgb(0, 0, 0, 0.035) set];
