@@ -248,6 +248,13 @@ button(NSString *title, NSRect frame, id target, SEL action)
 	backButton = [button(@"Back", NSMakeRect(4, 0, 90, 28), self, @selector(back:)) retain];
 	[backButton setKeyEquivalent: @"\033"];
 	[loginPage addSubview: backButton];
+
+	/* Tab order; GNUstep's automatic loop misses views that are hidden
+	 * or re-parented between pages. */
+	[nameField setNextKeyView: passwordField];
+	[passwordField setNextKeyView: loginButton];
+	[loginButton setNextKeyView: backButton];
+	[backButton setNextKeyView: nameField];
 }
 
 - (void) applicationDidFinishLaunching: (NSNotification *)n
@@ -310,6 +317,8 @@ button(NSString *title, NSRect frame, id target, SEL action)
 	[self showUsers];
 	[window makeKeyAndOrderFront: nil];
 	[window makeFirstResponder: grid];
+	[window invalidateCursorRectsForView: bg];
+	[[NSCursor arrowCursor] set];
 	[NSApp activateIgnoringOtherApps: YES];
 }
 
@@ -336,6 +345,7 @@ button(NSString *title, NSRect frame, id target, SEL action)
 	[nameLabel setStringValue: other ? @"" : [tile fullName]];
 	[nameLabel setHidden: other];
 	[nameField setHidden: !other];
+	[backButton setNextKeyView: other ? (NSView *)nameField : (NSView *)passwordField];
 	[nameField setStringValue: @""];
 	[passwordField setStringValue: @""];
 	[message setStringValue: @""];

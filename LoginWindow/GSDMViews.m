@@ -41,6 +41,12 @@ drawCentered(NSString *s, NSDictionary *attrs, NSRect r)
 	[super dealloc];
 }
 
+/* No window manager runs here to give the pointer a cursor. */
+- (void) resetCursorRects
+{
+	[self addCursorRect: [self bounds] cursor: [NSCursor arrowCursor]];
+}
+
 - (void) setImage: (NSImage *)anImage
 {
 	ASSIGN(image, anImage);
