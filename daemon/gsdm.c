@@ -1003,8 +1003,15 @@ remove_user_auth(const struct user *u)
 	}
 }
 
-/* Waits for the session; stops it if the X server or gsdm goes away. */
-static void
+/*
+ * A session asks for the machine to restart or shut down by ending with one of these exit statuses (the session script
+ * does it for a desktop that leaves the request in the user's home; Naples' Hexley menu is one). It is the Restart and
+ * Shut Down buttons of the login window, which anyone at the screen can press, so it gives the user nothing new.
+ */
+enum { SESSION_RESTART = 10, SESSION_SHUTDOWN = 11 };
+
+/* Waits for the session; stops it if the X server or gsdm goes away. Returns the session's exit status, or -1. */
+static int
 wait_session(pid_t pid)
 {
 	for (;;) {
@@ -1016,13 +1023,13 @@ wait_session(pid_t pid)
 			kill(-pid, SIGHUP);
 			msleep(300);
 			kill(-pid, SIGKILL);
-			return;
+			return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
 		}
 		if (got_quit || !server_alive()) {
 			logmsg("stopping session (pid %d)", (int)pid);
 			kill(-pid, SIGHUP);
 			stop_group(pid, 5000);
-			return;
+			return -1;
 		}
 		msleep(250);
 	}
@@ -1319,6 +1326,7 @@ main(int argc, char **argv)
 		for (;;) {
 			struct user u;
 			enum outcome o;
+			int req = -1;
 
 			memset(&u, 0, sizeof(u));
 			if (start_greeter() != 0) {
@@ -1333,8 +1341,10 @@ main(int argc, char **argv)
 				s = start_session(&u);
 				if (s > 0) {
 					logmsg("session for %s started (pid %d)", u.name, (int)s);
-					wait_session(s);
+					req = wait_session(s);
 					remove_user_auth(&u);
+					if (req == SESSION_RESTART) run_power_command("restart (asked by the session)", cfg.reboot);
+					else if (req == SESSION_SHUTDOWN) run_power_command("shut down (asked by the session)", cfg.halt);
 				}
 				break;          /* xdm terminateServer: a fresh server per login */
 			}

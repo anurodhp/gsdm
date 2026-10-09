@@ -38,6 +38,14 @@ Shift-Tab move between the fields, and a wrong password shakes the panel.
 Authentication is `crypt(3)` against whatever `getpwnam()` returns as the
 password hash (BSD and Darwin, or Linux via `getspnam`). There is no PAM.
 
+## Restart and shut down from the session
+
+A session can ask for the machine to restart or shut down by ending with exit status 10 (restart) or 11 (shut down); gsdm
+then runs the `reboot` or `halt` command as the login window's buttons do. The login window's Restart and Shut Down are
+open to anyone at the screen, so this gives a logged-in user nothing they could not already do. The Xsession script in
+iokit (`x11_config/gsdm/Xsession`) shows the convention: the desktop leaves `restart` or `shutdown` in `~/.session-request`
+and the script exits with the matching status when the window manager ends.
+
 ## Building
 
 gsdm uses gnustep-make. With GNUstep installed and `GNUSTEP_MAKEFILES` set
